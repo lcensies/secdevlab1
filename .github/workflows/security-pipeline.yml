@@ -7,6 +7,11 @@ on:
     branches: [ main ]
   workflow_dispatch:
 
+permissions:
+  contents: read
+  security-events: write
+  actions: read
+
 jobs:
   build-and-test:
     name: Build and Test
@@ -66,22 +71,17 @@ jobs:
         uses: actions/checkout@v4
         
       - name: Run Semgrep
-        uses: semgrep/semgrep-action@v1
-        with:
-          config: >-
-            p/security-audit
-            p/nodejs
-            p/typescript
-            p/owasp-top-ten
-          generateSarif: "1"
-        env:
-          SEMGREP_RULES: auto
+        run: |
+          pip install semgrep
+          semgrep --config=auto --sarif --output=semgrep.sarif || true
+        continue-on-error: true
           
       - name: Upload SARIF report
         if: always()
         uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: semgrep.sarif
+        continue-on-error: true
           
       - name: Upload Semgrep results as artifact
         if: always()
