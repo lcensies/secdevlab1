@@ -16,26 +16,26 @@ jobs:
   build-and-test:
     name: Build and Test
     runs-on: ubuntu-latest
-    
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-        
+
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '20'
-      
+
       - name: Install dependencies
         run: npm install
-        
+
       - name: Build server
         run: npm run build:server
-        
+
       - name: Run tests
         run: npm run test:server
         continue-on-error: false
-        
+
       - name: Upload build artifacts
         if: always()
         uses: actions/upload-artifact@v4
@@ -44,17 +44,124 @@ jobs:
           path: build/
           retention-days: 30
 
+  llm-review:
+    name: LLM Code Review
+    runs-on: ubuntu-latest
+    needs: build-and-test
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Prepare code excerpt for LLM
+        run: |
+          mkdir -p llm-artifacts
+          # Collect key source files for review (keep under token limit)
+          head -120 server.ts > llm-artifacts/code-excerpt.txt
+          echo "---" >> llm-artifacts/code-excerpt.txt
+          cat .github/workflows/security-pipeline.yml >> llm-artifacts/code-excerpt.txt
+
+      - name: Send code to OpenAI for review
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          CODE=$(cat llm-artifacts/code-excerpt.txt | python3 -c "import sys,json; print(json.dumps(sys.stdin.read()))")
+          curl -s https://api.openai.com/v1/chat/completions \
+            -H "Content-Type: application/json" \
+            -H "Authorization: Bearer $OPENAI_API_KEY" \
+            -d "{
+              \"model\": \"gpt-4o-mini\",
+              \"messages\": [
+                {
+                  \"role\": \"system\",
+                  \"content\": \"You are a senior software engineer reviewing application source code and CI/CD pipeline configuration. Provide a concise technical review covering: 1) what the application does, 2) code quality observations, 3) notable design decisions in the pipeline, 4) potential improvement areas.\"
+                },
+                {
+                  \"role\": \"user\",
+                  \"content\": \"Review this application code and CI/CD pipeline configuration:\\n\\n\" $CODE
+                }
+              ],
+              \"max_tokens\": 800
+            }" | python3 -c "
+          import sys, json
+          d = json.load(sys.stdin)
+          if 'choices' in d:
+              print(d['choices'][0]['message']['content'])
+          else:
+              print('LLM API error:', json.dumps(d, indent=2))
+          " > llm-artifacts/llm-review.md
+
+      - name: Upload LLM review artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: llm-review
+          path: llm-artifacts/llm-review.md
+          retention-days: 30
+
+  llm-security-review:
+    name: LLM Security Analysis
+    runs-on: ubuntu-latest
+    needs: build-and-test
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Prepare pipeline config for security analysis
+        run: |
+          mkdir -p llm-artifacts
+          cp .github/workflows/security-pipeline.yml llm-artifacts/pipeline.yml
+
+      - name: Send pipeline to OpenAI for security analysis
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          CODE=$(cat llm-artifacts/pipeline.yml | python3 -c "import sys,json; print(json.dumps(sys.stdin.read()))")
+          curl -s https://api.openai.com/v1/chat/completions \
+            -H "Content-Type: application/json" \
+            -H "Authorization: Bearer $OPENAI_API_KEY" \
+            -d "{
+              \"model\": \"gpt-4o-mini\",
+              \"messages\": [
+                {
+                  \"role\": \"system\",
+                  \"content\": \"You are a DevSecOps security engineer. Analyze the provided CI/CD pipeline configuration from a security, reliability, and trust perspective. Identify: 1) potential security risks and vulnerabilities, 2) reliability failure points, 3) trust and supply-chain concerns, 4) missing security controls. For each finding, justify your observation and rate its severity (HIGH/MEDIUM/LOW).\"
+                },
+                {
+                  \"role\": \"user\",
+                  \"content\": \"Analyze this CI/CD pipeline configuration for security risks, vulnerabilities, and failure points:\\n\\n\" $CODE
+                }
+              ],
+              \"max_tokens\": 1000
+            }" | python3 -c "
+          import sys, json
+          d = json.load(sys.stdin)
+          if 'choices' in d:
+              print(d['choices'][0]['message']['content'])
+          else:
+              print('LLM API error:', json.dumps(d, indent=2))
+          " > llm-artifacts/llm-security-analysis.md
+
+      - name: Upload LLM security analysis artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: llm-security-analysis
+          path: llm-artifacts/llm-security-analysis.md
+          retention-days: 30
+
   secrets-scan:
     name: Secrets Scanning
     runs-on: ubuntu-latest
     needs: build-and-test
-    
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          
+
       - name: Run Gitleaks
         uses: gitleaks/gitleaks-action@v2
         env:
@@ -65,24 +172,24 @@ jobs:
     name: SAST - Static Application Security Testing
     runs-on: ubuntu-latest
     needs: secrets-scan
-    
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-        
+
       - name: Run Semgrep
         run: |
           pip install semgrep
           semgrep --config=auto --sarif --output=semgrep.sarif || true
         continue-on-error: true
-          
+
       - name: Upload SARIF report
         if: always()
         uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: semgrep.sarif
         continue-on-error: true
-          
+
       - name: Upload Semgrep results as artifact
         if: always()
         uses: actions/upload-artifact@v4
@@ -95,16 +202,16 @@ jobs:
     name: SCA - Software Composition Analysis
     runs-on: ubuntu-latest
     needs: sast-scan
-    
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-        
+
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '20'
-          
+
       - name: Run Snyk to check for vulnerabilities
         uses: snyk/actions/node@master
         continue-on-error: true
@@ -119,7 +226,7 @@ jobs:
           if [ ! -f snyk-report.json ]; then
             echo '{"info":"Snyk report not generated (token missing or scan skipped)"}' > snyk-report.json
           fi
-          
+
       - name: Upload Snyk report
         if: always()
         uses: actions/upload-artifact@v4
@@ -127,11 +234,11 @@ jobs:
           name: snyk-dependency-report
           path: snyk-report.json
           retention-days: 30
-          
+
       - name: Run npm audit
         run: |
           npm audit --audit-level=high --json > npm-audit-report.json || true
-          
+
       - name: Upload npm audit report
         if: always()
         uses: actions/upload-artifact@v4
@@ -144,14 +251,14 @@ jobs:
     name: Container Security Scanning
     runs-on: ubuntu-latest
     needs: dependency-scan
-    
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-        
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
-        
+
       - name: Build Docker image
         uses: docker/build-push-action@v5
         with:
@@ -161,7 +268,7 @@ jobs:
           tags: juice-shop:${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
-          
+
       - name: Run Trivy vulnerability scanner
         uses: aquasecurity/trivy-action@master
         with:
@@ -169,20 +276,20 @@ jobs:
           format: 'sarif'
           output: 'trivy-results.sarif'
           severity: 'CRITICAL,HIGH'
-          
+
       - name: Upload Trivy results to GitHub Security tab
         if: always()
         uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: 'trivy-results.sarif'
-          
+
       - name: Run Trivy for JSON report
         uses: aquasecurity/trivy-action@master
         with:
           image-ref: juice-shop:${{ github.sha }}
           format: 'json'
           output: 'trivy-results.json'
-          
+
       - name: Upload Trivy report artifact
         if: always()
         uses: actions/upload-artifact@v4
@@ -191,16 +298,69 @@ jobs:
           path: trivy-results.json
           retention-days: 30
 
-  security-summary:
-    name: Security Summary and Metrics
+  k8s-deploy:
+    name: Kubernetes Deployment
     runs-on: ubuntu-latest
-    needs: [build-and-test, secrets-scan, sast-scan, dependency-scan, container-scan]
-    if: always()
-    
+    needs: container-scan
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-        
+
+      - name: Create kind cluster
+        uses: helm/kind-action@v1
+        with:
+          cluster_name: juice-shop-cluster
+
+      - name: Build Docker image for kind
+        run: docker build -t juice-shop:local .
+
+      - name: Load image into kind cluster
+        run: kind load docker-image juice-shop:local --name juice-shop-cluster
+
+      - name: Apply Kubernetes manifests
+        run: |
+          kubectl apply -f k8s/namespace.yaml
+          kubectl apply -f k8s/deployment.yaml
+
+      - name: Wait for deployment rollout
+        run: |
+          kubectl rollout status deployment/juice-shop -n juice-shop --timeout=120s
+
+      - name: Verify deployment
+        run: |
+          echo "Pods:"
+          kubectl get pods -n juice-shop
+          echo "Services:"
+          kubectl get svc -n juice-shop
+          echo "Deployment:"
+          kubectl describe deployment juice-shop -n juice-shop | head -30
+
+      - name: Save deployment status
+        if: always()
+        run: |
+          mkdir -p k8s-report
+          kubectl get all -n juice-shop -o yaml > k8s-report/deployed-resources.yaml
+          kubectl get events -n juice-shop --sort-by='.lastTimestamp' > k8s-report/events.txt
+
+      - name: Upload K8s deployment report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: k8s-deployment-report
+          path: k8s-report/
+          retention-days: 30
+
+  security-summary:
+    name: Security Summary and Metrics
+    runs-on: ubuntu-latest
+    needs: [build-and-test, llm-review, llm-security-review, secrets-scan, sast-scan, dependency-scan, container-scan, k8s-deploy]
+    if: always()
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
       - name: Generate Security Summary
         run: |
           echo "# Security Pipeline Summary" >> $GITHUB_STEP_SUMMARY
@@ -211,20 +371,16 @@ jobs:
           echo "- **Triggered by**: ${{ github.actor }}" >> $GITHUB_STEP_SUMMARY
           echo "- **Run Number**: #${{ github.run_number }}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "## Security Stages Completed" >> $GITHUB_STEP_SUMMARY
-          echo "- ✅ Build and Test" >> $GITHUB_STEP_SUMMARY
-          echo "- ✅ Secrets Scanning (GitLeaks)" >> $GITHUB_STEP_SUMMARY
-          echo "- ✅ SAST (Semgrep)" >> $GITHUB_STEP_SUMMARY
-          echo "- ✅ SCA - Dependency Scanning (Snyk + npm audit)" >> $GITHUB_STEP_SUMMARY
-          echo "- ✅ Container Scanning (Trivy)" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "## Artifacts Available" >> $GITHUB_STEP_SUMMARY
-          echo "- Build output" >> $GITHUB_STEP_SUMMARY
-          echo "- Semgrep SARIF report" >> $GITHUB_STEP_SUMMARY
-          echo "- Snyk dependency report" >> $GITHUB_STEP_SUMMARY
-          echo "- npm audit report" >> $GITHUB_STEP_SUMMARY
-          echo "- Trivy container scan results" >> $GITHUB_STEP_SUMMARY
-          
+          echo "## Stage Results" >> $GITHUB_STEP_SUMMARY
+          echo "- Build and Test: ${{ needs.build-and-test.result }}" >> $GITHUB_STEP_SUMMARY
+          echo "- LLM Code Review: ${{ needs.llm-review.result }}" >> $GITHUB_STEP_SUMMARY
+          echo "- LLM Security Analysis: ${{ needs.llm-security-review.result }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Secrets Scanning (GitLeaks): ${{ needs.secrets-scan.result }}" >> $GITHUB_STEP_SUMMARY
+          echo "- SAST (Semgrep): ${{ needs.sast-scan.result }}" >> $GITHUB_STEP_SUMMARY
+          echo "- SCA Dependency Scanning: ${{ needs.dependency-scan.result }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Container Scanning (Trivy): ${{ needs.container-scan.result }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Kubernetes Deployment: ${{ needs.k8s-deploy.result }}" >> $GITHUB_STEP_SUMMARY
+
       - name: Record pipeline metrics
         run: |
           mkdir -p metrics
@@ -237,14 +393,17 @@ jobs:
             "actor": "${{ github.actor }}",
             "stages": {
               "build": "${{ needs.build-and-test.result }}",
+              "llm_review": "${{ needs.llm-review.result }}",
+              "llm_security": "${{ needs.llm-security-review.result }}",
               "secrets_scan": "${{ needs.secrets-scan.result }}",
               "sast": "${{ needs.sast-scan.result }}",
               "sca": "${{ needs.dependency-scan.result }}",
-              "container_scan": "${{ needs.container-scan.result }}"
+              "container_scan": "${{ needs.container-scan.result }}",
+              "k8s_deploy": "${{ needs.k8s-deploy.result }}"
             }
           }
           EOF
-          
+
       - name: Upload metrics
         if: always()
         uses: actions/upload-artifact@v4
