@@ -78,7 +78,7 @@ jobs:
           
       - name: Upload SARIF report
         if: always()
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: semgrep.sarif
         continue-on-error: true
@@ -112,6 +112,13 @@ jobs:
           SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
         with:
           args: --severity-threshold=high --json-file-output=snyk-report.json
+
+      - name: Ensure Snyk report exists
+        if: always()
+        run: |
+          if [ ! -f snyk-report.json ]; then
+            echo '{"info":"Snyk report not generated (token missing or scan skipped)"}' > snyk-report.json
+          fi
           
       - name: Upload Snyk report
         if: always()
@@ -165,7 +172,7 @@ jobs:
           
       - name: Upload Trivy results to GitHub Security tab
         if: always()
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: 'trivy-results.sarif'
           
