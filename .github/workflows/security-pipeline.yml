@@ -75,7 +75,29 @@ jobs:
           pip install semgrep
           semgrep --config=auto --sarif --output=semgrep.sarif || true
         continue-on-error: true
-          
+
+      - name: Summarize Semgrep findings
+        if: always()
+        run: |
+          if [ -f semgrep.sarif ]; then
+            python3 - <<'EOF'
+import json, sys
+with open('semgrep.sarif') as f:
+    d = json.load(f)
+results = d.get('runs', [{}])[0].get('results', [])
+print(f"Semgrep findings: {len(results)}")
+for r in results[:20]:
+    loc = r.get('locations', [{}])[0].get('physicalLocation', {}).get('artifactLocation', {}).get('uri', 'unknown')
+    line = r.get('locations', [{}])[0].get('physicalLocation', {}).get('region', {}).get('startLine', '')
+    rule = r.get('ruleId', '')
+    msg = r.get('message', {}).get('text', '')[:100]
+    print(f"  [{rule}] {loc}:{line} — {msg}")
+EOF
+          else
+            echo "semgrep.sarif not found"
+          fi
+        continue-on-error: true
+
       - name: Upload SARIF report
         if: always()
         uses: github/codeql-action/upload-sarif@v4
@@ -130,8 +152,9 @@ jobs:
           
       - name: Run npm audit
         run: |
-          npm audit --audit-level=high --json > npm-audit-report.json || true
-          
+          npm audit --audit-level=high 2>&1 | tee npm-audit-console.txt || true
+          npm audit --audit-level=high --json > npm-audit-report.json 2>/dev/null || true
+
       - name: Upload npm audit report
         if: always()
         uses: actions/upload-artifact@v4
@@ -162,6 +185,16 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
           
+      - name: Run Trivy filesystem scan (secrets and misconfigs)
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'fs'
+          scan-ref: '.'
+          scanners: 'secret,misconfig'
+          severity: 'HIGH,CRITICAL'
+          format: 'table'
+        continue-on-error: true
+
       - name: Run Trivy vulnerability scanner
         uses: aquasecurity/trivy-action@master
         with:
