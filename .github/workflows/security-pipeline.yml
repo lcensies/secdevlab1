@@ -80,19 +80,7 @@ jobs:
         if: always()
         run: |
           if [ -f semgrep.sarif ]; then
-            python3 - <<'EOF'
-import json, sys
-with open('semgrep.sarif') as f:
-    d = json.load(f)
-results = d.get('runs', [{}])[0].get('results', [])
-print(f"Semgrep findings: {len(results)}")
-for r in results[:20]:
-    loc = r.get('locations', [{}])[0].get('physicalLocation', {}).get('artifactLocation', {}).get('uri', 'unknown')
-    line = r.get('locations', [{}])[0].get('physicalLocation', {}).get('region', {}).get('startLine', '')
-    rule = r.get('ruleId', '')
-    msg = r.get('message', {}).get('text', '')[:100]
-    print(f"  [{rule}] {loc}:{line} — {msg}")
-EOF
+            python3 -c "import json; d=json.load(open('semgrep.sarif')); results=d.get('runs',[{}])[0].get('results',[]); print('Semgrep findings:', len(results)); [print('  ['+r.get('ruleId','')+'] '+r.get('locations',[{}])[0].get('physicalLocation',{}).get('artifactLocation',{}).get('uri','?')+':'+str(r.get('locations',[{}])[0].get('physicalLocation',{}).get('region',{}).get('startLine',''))+' -- '+r.get('message',{}).get('text','')[:100]) for r in results[:20]]"
           else
             echo "semgrep.sarif not found"
           fi
