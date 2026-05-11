@@ -142,7 +142,7 @@ jobs:
         run: |
           npm audit --audit-level=high 2>&1 | tee npm-audit-console.txt || true
           npm audit --audit-level=high --json > npm-audit-report.json 2>/dev/null || true
-
+          
       - name: Upload npm audit report
         if: always()
         uses: actions/upload-artifact@v4
@@ -160,6 +160,16 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
         
+      - name: Run Trivy filesystem scan (secrets and misconfigs)
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'fs'
+          scan-ref: '.'
+          scanners: 'secret,misconfig'
+          severity: 'HIGH,CRITICAL'
+          format: 'table'
+        continue-on-error: true
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
         
@@ -173,16 +183,6 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
           
-      - name: Run Trivy filesystem scan (secrets and misconfigs)
-        uses: aquasecurity/trivy-action@master
-        with:
-          scan-type: 'fs'
-          scan-ref: '.'
-          scanners: 'secret,misconfig'
-          severity: 'HIGH,CRITICAL'
-          format: 'table'
-        continue-on-error: true
-
       - name: Run Trivy vulnerability scanner
         uses: aquasecurity/trivy-action@master
         with:
@@ -233,11 +233,11 @@ jobs:
           echo "- **Run Number**: #${{ github.run_number }}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "## Security Stages Completed" >> $GITHUB_STEP_SUMMARY
-          echo "- ✅ Build and Test" >> $GITHUB_STEP_SUMMARY
-          echo "- ✅ Secrets Scanning (GitLeaks)" >> $GITHUB_STEP_SUMMARY
-          echo "- ✅ SAST (Semgrep)" >> $GITHUB_STEP_SUMMARY
-          echo "- ✅ SCA - Dependency Scanning (Snyk + npm audit)" >> $GITHUB_STEP_SUMMARY
-          echo "- ✅ Container Scanning (Trivy)" >> $GITHUB_STEP_SUMMARY
+          echo "- Build and Test" >> $GITHUB_STEP_SUMMARY
+          echo "- Secrets Scanning (GitLeaks)" >> $GITHUB_STEP_SUMMARY
+          echo "- SAST (Semgrep)" >> $GITHUB_STEP_SUMMARY
+          echo "- SCA - Dependency Scanning (Snyk + npm audit)" >> $GITHUB_STEP_SUMMARY
+          echo "- Container Scanning (Trivy)" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "## Artifacts Available" >> $GITHUB_STEP_SUMMARY
           echo "- Build output" >> $GITHUB_STEP_SUMMARY
